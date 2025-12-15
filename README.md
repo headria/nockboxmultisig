@@ -105,6 +105,7 @@ src/
 │   ├── step-2-configure-multisig.tsx
 │   ├── step-3-fees-review.tsx    # Recipients, fees, build tx
 │   └── step-4-sign-broadcast.tsx # Sign & broadcast
+├── txBuilder/                 # Transaction building utilities
 ├── lib/
 │   ├── broadcast.ts           # gRPC broadcast helper
 │   └── transaction-storage.ts # LocalStorage for transactions
