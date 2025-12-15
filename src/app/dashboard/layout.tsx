@@ -1,14 +1,22 @@
 "use client";
 
 import { Sidebar } from "@/components/dashboard/sidebar";
-import { WalletProvider, useWallet } from "@/context/wallet-context";
+import { useWallet } from "@/context/wallet-context";
 import { TransactionProvider } from "@/context/transaction-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Wallet, Loader2 } from "lucide-react";
+import { useEffect } from "react";
 
 function DashboardContent({ children }: { children: React.ReactNode }) {
-  const { wallet, isConnecting, connect } = useWallet();
+  const { wallet, isConnecting, connect, reconnect, isLocked } = useWallet();
+
+  useEffect(() => {
+    if (wallet.connected) return;
+    if (isConnecting) return;
+    if (isLocked) return;
+    void reconnect();
+  }, [wallet.connected, isConnecting, isLocked, reconnect]);
 
   if (!wallet.connected) {
     return (
@@ -65,9 +73,5 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <WalletProvider>
-      <DashboardContent>{children}</DashboardContent>
-    </WalletProvider>
-  );
+  return <DashboardContent>{children}</DashboardContent>;
 }

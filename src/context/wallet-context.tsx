@@ -5,6 +5,8 @@ import { WalletState, Note } from "@/types";
 import { broadcastSignedTransaction, type SignedTxLike } from "@/lib/broadcast";
 import { toast } from "sonner";
 
+const LAST_CONNECTED_STORAGE_KEY = "nockbox:last_connected";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type NockchainProviderType = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,6 +80,28 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const wasmRef = useRef<WasmType | null>(null);
   const lockNotificationShownRef = useRef(false);
 
+  const setLastConnected = useCallback((value: boolean) => {
+    if (typeof window === "undefined") return;
+    try {
+      if (value) {
+        window.localStorage.setItem(LAST_CONNECTED_STORAGE_KEY, "1");
+      } else {
+        window.localStorage.removeItem(LAST_CONNECTED_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const getLastConnected = useCallback((): boolean => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(LAST_CONNECTED_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }, []);
+
   // Check if Iris wallet is installed (check window.iris or window.nockchain)
   useEffect(() => {
     const checkInstalled = () => {
@@ -101,6 +125,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       providerRef.current.dispose();
       providerRef.current = null;
     }
+    setLastConnected(false);
     setGrpcEndpoint(null);
     setWallet({
       connected: false,
@@ -191,6 +216,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           balance: totalBalance,
           notes,
         });
+
+        setLastConnected(true);
         
         // Listen for account changes
         provider.on('accountsChanged', (accounts: string[]) => {
@@ -210,7 +237,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsConnecting(false);
     }
-  }, [disconnect, isInstalled]);
+  }, [disconnect, isInstalled, setLastConnected]);
 
   // Reconnect without resetting transaction state - just re-establish provider connection
   const reconnect = useCallback(async () => {
@@ -245,6 +272,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       setIsConnecting(false);
     }
   }, [isInstalled, connect]);
+
+  // On mount: if user previously connected, attempt to restore connection.
+  useEffect(() => {
+    if (!isInstalled) return;
+    if (wallet.connected) return;
+    if (isConnecting) return;
+    if (isLocked) return;
+    if (!getLastConnected()) return;
+    void reconnect();
+  }, [getLastConnected, isConnecting, isInstalled, isLocked, reconnect, wallet.connected]);
 
   // Poll wallet connection status every 10 seconds
   useEffect(() => {
