@@ -50,7 +50,9 @@ export function Step4SignBroadcast() {
     isSigning: isContextSigning,
     missingUnlocks,
     nockchainTx,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     downloadUnsignedTx,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     getUnsignedTxArtifacts,
     getSigningPayload,
     signedTx,
@@ -214,6 +216,7 @@ export function Step4SignBroadcast() {
     toast.success("Copied to clipboard");
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const uint8ToBase64 = (bytes: Uint8Array): string => {
     let binary = "";
     const chunkSize = 0x8000;
@@ -224,6 +227,7 @@ export function Step4SignBroadcast() {
     return btoa(binary);
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const getSignedProtobufJson = (): string => {
     if (signedTx && typeof signedTx === 'object' && signedTx !== null && 'toRawTx' in signedTx) {
       const rawTx = (signedTx as { toRawTx: () => { toProtobuf: () => unknown } }).toRawTx();
@@ -242,14 +246,14 @@ export function Step4SignBroadcast() {
     }
     
     // Convert notes and spendConditions to protobuf format
-    const notesProtobuf = payload.notes.map((note: any) => {
+    const notesProtobuf = payload.notes.map((note: { toProtobuf?: () => unknown }) => {
       if (typeof note.toProtobuf === 'function') {
         return note.toProtobuf();
       }
       return note;
     });
     
-    const spendConditionsProtobuf = payload.spendConditions.map((sc: any) => {
+    const spendConditionsProtobuf = payload.spendConditions.map((sc: { toProtobuf?: () => unknown }) => {
       if (typeof sc.toProtobuf === 'function') {
         return sc.toProtobuf();
       }

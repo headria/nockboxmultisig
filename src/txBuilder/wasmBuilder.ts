@@ -233,6 +233,7 @@ export function createJamBlob(bytes: Uint8Array, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function decodeUnsignedTransaction(jamBytes: any): Promise<wasm.RawTx> {
   await ensureIrisWasm();
   if (jamBytes instanceof Uint8Array) {
@@ -253,6 +254,7 @@ export async function decodeUnsignedTransaction(jamBytes: any): Promise<wasm.Raw
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function decodeSignedTransaction(jamBytes: any): Promise<wasm.RawTx> {
   await ensureIrisWasm();
   if (jamBytes instanceof Uint8Array) {

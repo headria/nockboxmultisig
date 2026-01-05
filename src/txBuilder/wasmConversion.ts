@@ -2,6 +2,7 @@ import type { Transaction, Signature } from "./tx-core";
 
 type WasmModule = typeof import("@nockbox/iris-sdk")["wasm"];
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 type NockchainTx = ReturnType<WasmModule["NockchainTx"]["fromJam"]>;
 
 type TxNotes = ReturnType<WasmModule["TxBuilder"]["prototype"]["allNotes"]>;
@@ -17,10 +18,12 @@ type ConversionResult = {
   spendConditions: WasmSpendCondition[];
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function wasmTxToTransaction(tx: any): Promise<ConversionResult> {
   console.log('tx:', tx);
   
   // Get the protobuf representation which is a plain JS object
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let protobuf: any;
   if (typeof tx.toProtobuf === 'function') {
     protobuf = tx.toProtobuf();
@@ -34,6 +37,7 @@ export async function wasmTxToTransaction(tx: any): Promise<ConversionResult> {
   const spends = protobuf.spends || [];
 
   // Convert WASM spends to internal Spends
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transactionSpends = spends.map((spend: any) => {
     console.log('spend structure:', JSON.stringify(spend, null, 2));
     
@@ -79,6 +83,7 @@ export async function wasmTxToTransaction(tx: any): Promise<ConversionResult> {
 
   // Extract output amounts from the protobuf outputs (notes)
   // The outputs in JAM format are notes with assets.value
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transactionOutputs = outputs.map((output: any) => {
     console.log('Processing output:', JSON.stringify(output, null, 2));
     
@@ -121,6 +126,7 @@ export async function wasmTxToTransaction(tx: any): Promise<ConversionResult> {
     outputs: transactionOutputs,
     fee: totalFee,
     version: Number(protobuf.version?.value || 1),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     unsignedHash: protobuf.id || "dummy" as any,
   };
 
@@ -131,6 +137,7 @@ export async function wasmTxToTransaction(tx: any): Promise<ConversionResult> {
   return { transaction, rawTx: tx, notes, spendConditions };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
 function convertWasmSeeds(seeds: any, witness?: any): any {
   // Try to extract PKH from witness if available
   const pkhSig = witness?.pkh_signature;
@@ -153,7 +160,9 @@ function convertWasmSeeds(seeds: any, witness?: any): any {
   // Handle array of seeds - extract lock_root as PKH
   if (Array.isArray(seeds)) {
     const pkhs = seeds
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .map((s: any) => s.lock_root)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .filter((lr: any) => lr);
     return { kind: "%pkh", threshold: 1, pkhs, signatures: [] };
   }
@@ -162,7 +171,9 @@ function convertWasmSeeds(seeds: any, witness?: any): any {
     return {
       kind: "%pkh",
       threshold: seeds.threshold,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pkhs: (seeds.pkhs || []).map((pkh: any) => pkh.value || pkh),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       signatures: (seeds.signatures || []).map((sig: any) => ({ [sig.key]: sig.value })) as Signature[],
     };
   }

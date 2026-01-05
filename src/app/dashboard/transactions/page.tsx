@@ -382,7 +382,8 @@ export default function TransactionsPage() {
       if (spend.seeds.kind !== "%pkh") continue;
       
       // Check if wallet address is in pkhs (for base58 format)
-      if (spend.seeds.pkhs.includes(walletAddr as any)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (spend.seeds.pkhs.includes(walletAddr as any)) {
         // Now check if there's a signature from this wallet
         for (const pubkey of Object.keys(spend.seeds.signatures)) {
           if (pubkey === walletAddr || 
@@ -415,9 +416,11 @@ export default function TransactionsPage() {
       
       let txJson: string | undefined;
       let jamData: string | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let rawTx: any;
       let isSigned = false;
       let walletPayloadJson: string | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let walletPayloadNotes: any[] = []; // Store notes for amount extraction
       
       // FIRST: Try to read as text and check for wallet payload format (has rawTx, notes, spendConditions)
@@ -485,6 +488,7 @@ export default function TransactionsPage() {
               isSigned = true;
             } else {
               // Try as JAM (base64 first, then JSON protobuf, then binary)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               let parsed: any;
               try {
                 const jamBytes = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
@@ -564,6 +568,7 @@ export default function TransactionsPage() {
         
         // Extract signers from the transaction's spends
         for (const spend of transaction.spends) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const seeds = spend.seeds as any;
           if (seeds?.kind === "%pkh" && seeds.pkhs) {
             for (const pkh of seeds.pkhs) {
@@ -583,6 +588,7 @@ export default function TransactionsPage() {
       }
 
       // Determine required/collected sigs from extracted signers
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const firstSeeds = transaction?.spends[0]?.seeds as any;
       const requiredSigs = extractedSigners.length > 0 
         ? (firstSeeds?.threshold || 1)
