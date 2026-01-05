@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,18 +13,88 @@ import { ArrowLeft, Check, Loader2, QrCode, Send, Pen, Copy, ExternalLink, Party
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { QRCodeSVG } from "qrcode.react";
+import { ensureIrisWasm } from "@/lib/iris-wasm";
 
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(
+      value,
+      (_, v) => (typeof v === "bigint" ? v.toString() : v),
+      2,
+    );
+  } catch {
+    return String(value);
+  }
+}
 
+function describeUnlock(unlock: unknown): string {
+  if (!unlock) return "Unlock requirement";
+  if (typeof unlock === "string") return unlock;
+  if (typeof unlock === "object") {
+    const obj = unlock as Record<string, unknown>;
+    if (typeof obj.type === "string") return `${obj.type} unlock`;
+    if (typeof obj.kind === "string") return `${obj.kind} unlock`;
+    if (Array.isArray(obj.pkhs)) return "Signature required";
+    if ("hash" in obj) return "Preimage required";
+  }
+  return "Unlock requirement";
+}
+ 
 export function Step4SignBroadcast() {
-  const { transactionData, signatureRequests, updateSignatureRequest, setCurrentStep, resetTransaction, exportTx, isSigning: isContextSigning } = useTransaction();
-  const { wallet, signTransaction, broadcastTransaction } = useWallet();
+  const {
+    transactionData,
+    signatureRequests,
+    updateSignatureRequest,
+    setCurrentStep,
+    resetTransaction,
+    isSigning: isContextSigning,
+    missingUnlocks,
+    nockchainTx,
+    downloadUnsignedTx,
+    getUnsignedTxArtifacts,
+    getSigningPayload,
+    signedTx,
+    setSignedTx,
+  } = useTransaction();
+  const { wallet, signRawTx, broadcastTransaction } = useWallet();
   const [isSigning, setIsSigning] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(false);
   const [selectedSigner, setSelectedSigner] = useState<string | null>(null);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [singleSignerSigned, setSingleSignerSigned] = useState(false);
-  const [signedTx, setSignedTx] = useState<unknown | null>(null);
+
+  const signWithWallet = useCallback(async () => {
+    const payload = getSigningPayload?.();
+    if (!payload) {
+      throw new Error("Please build the transaction before signing.");
+    }
+
+    try {
+      const signedTxProtobuf = await signRawTx({
+        rawTx: payload.rawTx,
+        notes: payload.notes,
+        spendConditions: payload.spendConditions,
+      });
+
+      const wasm = await ensureIrisWasm();
+      const rawTx =
+        signedTxProtobuf &&
+        typeof signedTxProtobuf === "object" &&
+        signedTxProtobuf !== null &&
+        "toNockchainTx" in signedTxProtobuf
+          ? (signedTxProtobuf as unknown)
+          : wasm.RawTx.fromProtobuf(signedTxProtobuf);
+      const signedNockchainTx =
+        rawTx && typeof rawTx === "object" && rawTx !== null && "toNockchainTx" in rawTx
+          ? (rawTx as { toNockchainTx: () => unknown }).toNockchainTx()
+          : wasm.RawTx.fromProtobuf(rawTx as unknown).toNockchainTx();
+
+      setSignedTx(signedNockchainTx);
+    } finally {
+      payload.release();
+    }
+  }, [getSigningPayload, setSignedTx, signRawTx]);
 
   // Check if this is single-signer mode (no multisig pubkeys)
   const isSingleSignerMode = transactionData.multisigConfig.pubkeys.length === 0;
@@ -50,18 +120,7 @@ export function Step4SignBroadcast() {
     
     setIsSigning(id);
     try {
-      const firstOutput = transactionData.outputs[0];
-      if (!firstOutput) throw new Error("No recipient output");
-
-      const signed = await signTransaction({
-        notes: transactionData.selectedNotes,
-        recipient: firstOutput.address,
-        amountNock: firstOutput.amount,
-        feeNock: transactionData.fee,
-      });
-      setSignedTx(signed);
-      
-      // Update UI state
+      await signWithWallet();
       updateSignatureRequest(id, `sig_${pubkey.slice(0, 8)}`);
       toast.success("Signature collected from your wallet");
     } catch (err) {
@@ -86,16 +145,7 @@ export function Step4SignBroadcast() {
     
     setIsSigning("single");
     try {
-      const firstOutput = transactionData.outputs[0];
-      if (!firstOutput) throw new Error("No recipient output");
-
-      const signed = await signTransaction({
-        notes: transactionData.selectedNotes,
-        recipient: firstOutput.address,
-        amountNock: firstOutput.amount,
-        feeNock: transactionData.fee,
-      });
-      setSignedTx(signed);
+      await signWithWallet();
       setSingleSignerSigned(true);
       toast.success("Transaction signed by your wallet");
     } catch (err) {
@@ -174,29 +224,64 @@ export function Step4SignBroadcast() {
     return btoa(binary);
   };
 
-  const getUnsignedTxString = (): string => {
-    const tx = exportTx();
-    if (!tx) {
-      throw new Error("No transaction to export");
-    }
-    return tx;
-  };
-
-  const getSignedJam = (): Uint8Array => {
-    if (signedTx && typeof signedTx === 'object' && signedTx !== null && 'toJam' in signedTx) {
-      return (signedTx as { toJam: () => Uint8Array }).toJam();
+  const getSignedProtobufJson = (): string => {
+    if (signedTx && typeof signedTx === 'object' && signedTx !== null && 'toRawTx' in signedTx) {
+      const rawTx = (signedTx as { toRawTx: () => { toProtobuf: () => unknown } }).toRawTx();
+      const protobuf = rawTx.toProtobuf();
+      return JSON.stringify(protobuf);
     }
     throw new Error("No signed transaction available. Please sign first.");
   };
 
+  // Get full wallet payload with notes and spendConditions for proper wallet signing
+  const getFullWalletPayload = (rawTxProtobuf: unknown): string => {
+    const payload = getSigningPayload?.();
+    if (!payload) {
+      // Fallback to just rawTx if no payload available
+      return JSON.stringify({ rawTx: rawTxProtobuf });
+    }
+    
+    // Convert notes and spendConditions to protobuf format
+    const notesProtobuf = payload.notes.map((note: any) => {
+      if (typeof note.toProtobuf === 'function') {
+        return note.toProtobuf();
+      }
+      return note;
+    });
+    
+    const spendConditionsProtobuf = payload.spendConditions.map((sc: any) => {
+      if (typeof sc.toProtobuf === 'function') {
+        return sc.toProtobuf();
+      }
+      return sc;
+    });
+    
+    const fullPayload = {
+      rawTx: rawTxProtobuf,
+      notes: notesProtobuf,
+      spendConditions: spendConditionsProtobuf,
+    };
+    
+    // Don't release here as we may need it again
+    return JSON.stringify(fullPayload, (_, v) => typeof v === 'bigint' ? v.toString() : v);
+  };
+
   const handleExportUnsignedTransaction = () => {
     try {
-      const txString = getUnsignedTxString();
-      const blob = new Blob([txString], { type: 'application/json' });
+      if (!nockchainTx) {
+        throw new Error("Please build the transaction first.");
+      }
+      
+      // Export full payload with notes and spendConditions
+      const rawTx = nockchainTx.toRawTx();
+      const rawTxProtobuf = rawTx.toProtobuf();
+      const jsonStr = getFullWalletPayload(rawTxProtobuf);
+      
+      const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `nockbox-unsigned-${Date.now()}.json`;
+      a.download = `nockbox-unsigned-${Date.now()}.jam`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -209,9 +294,17 @@ export function Step4SignBroadcast() {
 
   const handleCopyUnsignedTransaction = () => {
     try {
-      const txString = getUnsignedTxString();
-      navigator.clipboard.writeText(txString);
-      toast.success("Unsigned transaction copied to clipboard");
+      if (!nockchainTx) {
+        throw new Error("Please build the transaction first.");
+      }
+      
+      // Copy full payload with notes and spendConditions
+      const rawTx = nockchainTx.toRawTx();
+      const rawTxProtobuf = rawTx.toProtobuf();
+      const jsonStr = getFullWalletPayload(rawTxProtobuf);
+      const base64 = btoa(jsonStr);
+      navigator.clipboard.writeText(base64);
+      toast.success("Unsigned transaction copied as base64");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to copy transaction");
     }
@@ -219,17 +312,24 @@ export function Step4SignBroadcast() {
 
   const handleExportSignedTransaction = () => {
     try {
-      const jam = getSignedJam();
-      const blob = new Blob([new Uint8Array(jam)], { type: 'application/jam' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `nockbox-signed-${Date.now()}.tx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast.success("Signed transaction exported successfully");
+      if (signedTx && typeof signedTx === 'object' && signedTx !== null && 'toRawTx' in signedTx) {
+        const rawTx = (signedTx as { toRawTx: () => { toProtobuf: () => unknown } }).toRawTx();
+        const protobuf = rawTx.toProtobuf();
+        const jsonStr = getFullWalletPayload(protobuf);
+        
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `nockbox-signed-${Date.now()}.tx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success("Signed transaction exported successfully");
+      } else {
+        throw new Error("No signed transaction available. Please sign first.");
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to export signed transaction");
     }
@@ -237,10 +337,16 @@ export function Step4SignBroadcast() {
 
   const handleCopySignedTransaction = () => {
     try {
-      const jam = getSignedJam();
-      const base64 = uint8ToBase64(jam);
-      navigator.clipboard.writeText(base64);
-      toast.success("Signed transaction (base64 jam) copied to clipboard");
+      if (signedTx && typeof signedTx === 'object' && signedTx !== null && 'toRawTx' in signedTx) {
+        const rawTx = (signedTx as { toRawTx: () => { toProtobuf: () => unknown } }).toRawTx();
+        const protobuf = rawTx.toProtobuf();
+        const jsonStr = getFullWalletPayload(protobuf);
+        const base64 = btoa(jsonStr);
+        navigator.clipboard.writeText(base64);
+        toast.success("Signed transaction (base64 JSON) copied to clipboard");
+      } else {
+        throw new Error("No signed transaction available. Please sign first.");
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to copy signed transaction");
     }
@@ -511,7 +617,7 @@ export function Step4SignBroadcast() {
             <div>
               <div className="text-lg font-medium">Export Transaction</div>
               <div className="text-sm text-muted-foreground">
-                Export unsigned JSON for import, and signed .tx for manual broadcast
+                Export unsigned JAM for multisig workflows and signed .tx for manual broadcast
               </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -558,6 +664,32 @@ export function Step4SignBroadcast() {
           </div>
         </CardContent>
       </Card>
+
+      {missingUnlocks.length > 0 && (
+        <Card className="bg-card border-border">
+          <CardHeader>
+            <CardTitle className="text-lg">Missing Unlocks</CardTitle>
+            <CardDescription>
+              Provide the required signatures or preimages before the builder can finalize this transaction.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {missingUnlocks.map((unlock, idx) => (
+              <div key={`unlock-${idx}`} className="rounded-lg border border-border/80 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-medium">{describeUnlock(unlock)}</div>
+                  <Badge variant="outline" className="border-destructive text-destructive">
+                    Action needed
+                  </Badge>
+                </div>
+                <pre className="text-xs bg-muted/40 rounded p-3 overflow-x-auto whitespace-pre-wrap break-all">
+                  {safeStringify(unlock)}
+                </pre>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Broadcast Card */}
       <Card className="bg-card border-border">

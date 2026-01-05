@@ -411,7 +411,9 @@ export function buildUnsignedTransaction(args: {
 
 function pkhIsAllowed(crypto: CryptoProvider, pubkey: PubKey, pkhs: readonly Hash[]): boolean {
   const pkh = crypto.hashPubkey(pubkey);
-  return pkhs.includes(pkh);
+  console.log("pkhIsAllowed", pubkey, pkh, pkhs);
+  // Check both the hash and the pubkey directly (for base58 format compatibility)
+  return pkhs.includes(pkh) || pkhs.includes(pubkey as Hash);
 }
 
 export function countCollectedPkh(seeds: PkhSeeds, crypto: CryptoProvider): number {
@@ -421,7 +423,9 @@ export function countCollectedPkh(seeds: PkhSeeds, crypto: CryptoProvider): numb
 
   for (const pubkey of Object.keys(seeds.signatures)) {
     const pkh = crypto.hashPubkey(pubkey);
-    if (!seeds.pkhs.includes(pkh)) continue;
+    console.log("countCollectedPkh", count, pkh, seeds.pkhs);
+    // Check both hash and direct match for base58 format compatibility
+    if (!seeds.pkhs.includes(pkh) && !seeds.pkhs.includes(pubkey as Hash)) continue;
     if (seenPkhs.has(pkh)) continue;
     seenPkhs.add(pkh);
     count++;
@@ -575,6 +579,63 @@ export function importTx(json: string): Transaction {
   if (!Array.isArray(parsed?.outputs)) throw new Error("Invalid tx: missing outputs.");
 
   return parsed as Transaction;
+}
+
+export async function signImportedTxJson(args: {
+  json: string;
+  signer: Signer;
+  crypto: CryptoProvider;
+}): Promise<string> {
+  const tryImport = (src: string): Transaction => {
+    try {
+      return importTx(src);
+    } catch {
+      /* ignore */
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(src, (_k, v) => {
+        if (typeof v === "string" && v.startsWith("n:")) return BigInt(v.slice(2));
+        return v;
+      });
+    } catch {
+      throw new Error("Invalid JSON input");
+    }
+
+    if (typeof parsed === "string") {
+      return tryImport(parsed);
+    }
+
+    if (parsed && typeof parsed === "object") {
+      const o = parsed as Record<string, unknown>;
+      if (typeof o.signedTxHex === "string") return tryImport(o.signedTxHex);
+      if (typeof o.unsignedTxHex === "string") return tryImport(o.unsignedTxHex);
+      if (
+        typeof (o as { version?: unknown }).version === "number" &&
+        typeof (o as { unsignedHash?: unknown }).unsignedHash === "string" &&
+        Array.isArray((o as { spends?: unknown }).spends) &&
+        Array.isArray((o as { outputs?: unknown }).outputs)
+      ) {
+        return o as unknown as Transaction;
+      }
+    }
+
+    throw new Error("Invalid transaction format");
+  };
+
+  const parsed = tryImport(args.json);
+
+  let next = parsed;
+  for (const spend of parsed.spends) {
+    try {
+      next = await signSpend({ tx: next, noteId: spend.noteId, signer: args.signer, crypto: args.crypto });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return exportTx(next);
 }
 
 /* ------------------------------------------

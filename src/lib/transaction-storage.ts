@@ -8,7 +8,10 @@ export interface StoredTransaction {
   recipient: string;
   fee: number;
   unsignedTxHex?: string;
+  unsignedTxJam?: string;
+  sourceJson?: string;
   signedTxHex?: string;
+  signedTxJam?: string;
   txHash?: string;
   status: "pending" | "signed" | "broadcast" | "completed";
   requiredSigs: number;

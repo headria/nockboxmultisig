@@ -373,3 +373,4 @@ export function getNoteShortId(note: Note): string {
   const id = noteIdFromName(note.name);
   return truncateHash(id, 6);
 }
+

@@ -1,8 +1,8 @@
 "use client";
 
 import React, { createContext, useContext, useState, useCallback } from "react";
-import { TransactionData, Note, MultisigConfig, Output, Seed, WizardStep, SignatureRequest } from "@/types";
-import { useTransactionBuilder } from "@/hooks/useTransactionBuilder";
+import { TransactionData, Note, MultisigConfig, Output, Seed, WizardStep, SignatureRequest, DestinationLock } from "@/types";
+import { useTransactionBuilder, type SigningPayload } from "@/hooks/useTransactionBuilder";
 import type { Transaction } from "@/txBuilder";
 import { 
   saveTransaction, 
@@ -10,6 +10,9 @@ import {
   createTransactionId,
   StoredTransaction 
 } from "@/lib/transaction-storage";
+import { createJamBlob, exportUnsignedTransaction, type ExportedTxArtifacts } from "@/txBuilder/wasmBuilder";
+
+type TxBuilderHook = ReturnType<typeof useTransactionBuilder>;
 
 interface TransactionContextType {
   currentStep: WizardStep | number;
@@ -20,6 +23,7 @@ interface TransactionContextType {
   updateOutputs: (outputs: Output[]) => void;
   updateSeeds: (seeds: Seed[]) => void;
   updateFee: (fee: number) => void;
+  updateDestinationLock: (lock: DestinationLock | undefined) => void;
   signatureRequests: SignatureRequest[];
   updateSignatureRequest: (id: string, signature: string) => void;
   resetTransaction: () => void;
@@ -29,10 +33,19 @@ interface TransactionContextType {
   txError: string | null;
   isBuilding: boolean;
   isSigning: boolean;
+  wasmBuilder: TxBuilderHook["wasmBuilder"];
+  nockchainTx: TxBuilderHook["nockchainTx"];
+  missingUnlocks: TxBuilderHook["missingUnlocks"];
+  feeReport: TxBuilderHook["feeReport"];
   buildTx: (overrides?: { outputs?: Output[]; fee?: number }) => Promise<Transaction | null>;
   signTx: (pubkey: string) => Promise<void>;
   getTxStatus: () => { isFullySigned: boolean; spends: Array<{ noteId: string; threshold: number; collected: number; complete: boolean }> } | null;
   exportTx: () => string | null;
+  getUnsignedTxArtifacts: () => ExportedTxArtifacts | null;
+  downloadUnsignedTx: (filename?: string) => void;
+  getSigningPayload: () => SigningPayload | null;
+  signedTx: unknown | null;
+  setSignedTx: (tx: unknown | null) => void;
   // Storage
   currentTxId: string | null;
   saveToStorage: (walletAddress: string) => void;
@@ -58,6 +71,7 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
   const [transactionData, setTransactionData] = useState<TransactionData>(defaultTransactionData);
   const [signatureRequests, setSignatureRequests] = useState<SignatureRequest[]>([]);
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
+  const [signedTx, setSignedTx] = useState<unknown | null>(null);
   
   // Transaction builder hook
   const txBuilder = useTransactionBuilder();
@@ -90,6 +104,10 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
     setTransactionData((prev) => ({ ...prev, fee }));
   }, []);
 
+  const updateDestinationLock = useCallback((lock: DestinationLock | undefined) => {
+    setTransactionData((prev) => ({ ...prev, destinationLock: lock }));
+  }, []);
+
   const updateSignatureRequest = useCallback((id: string, signature: string) => {
     setSignatureRequests((prev) =>
       prev.map((req) =>
@@ -103,10 +121,12 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
     setTransactionData(defaultTransactionData);
     setSignatureRequests([]);
     txBuilder.reset();
+    setSignedTx(null);
   }, [txBuilder]);
 
   // Build transaction using txBuilder
   const buildTx = useCallback(async (overrides?: { outputs?: Output[]; fee?: number }) => {
+    setSignedTx(null);
     const tx = await txBuilder.buildTransaction({
       notes: transactionData.selectedNotes,
       outputs: overrides?.outputs ?? transactionData.outputs,
@@ -116,6 +136,11 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
         pubkeys: transactionData.multisigConfig.pubkeys,
       },
       fee: overrides?.fee ?? transactionData.fee,
+      // Pass destination lock for multisig outputs
+      destinationLock: transactionData.destinationLock ? {
+        threshold: transactionData.destinationLock.threshold,
+        signers: transactionData.destinationLock.signers,
+      } : undefined,
     });
     return tx;
   }, [txBuilder, transactionData]);
@@ -164,6 +189,20 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
       }
     },
     [transactionData, signatureRequests]
+  );
+
+  const getUnsignedTxArtifacts = useCallback((): ExportedTxArtifacts | null => {
+    if (!txBuilder.nockchainTx) return null;
+    return exportUnsignedTransaction(txBuilder.nockchainTx);
+  }, [txBuilder.nockchainTx]);
+
+  const downloadUnsignedTx = useCallback(
+    (filename = "unsigned-tx.jam") => {
+      const artifacts = getUnsignedTxArtifacts();
+      if (!artifacts) return;
+      createJamBlob(artifacts.unsignedBytes, filename);
+    },
+    [getUnsignedTxArtifacts],
   );
 
   // Save current transaction to local storage
@@ -220,6 +259,7 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
         updateOutputs,
         updateSeeds,
         updateFee,
+        updateDestinationLock,
         signatureRequests,
         updateSignatureRequest,
         resetTransaction,
@@ -229,10 +269,19 @@ export function TransactionProvider({ children }: { children: React.ReactNode })
         txError: txBuilder.error,
         isBuilding: txBuilder.isBuilding,
         isSigning: txBuilder.isSigning,
+        wasmBuilder: txBuilder.wasmBuilder,
+        nockchainTx: txBuilder.nockchainTx,
+        missingUnlocks: txBuilder.missingUnlocks,
+        feeReport: txBuilder.feeReport,
         buildTx,
         signTx,
         getTxStatus: txBuilder.getStatus,
         exportTx: txBuilder.exportTransaction,
+        getUnsignedTxArtifacts,
+        downloadUnsignedTx,
+        getSigningPayload: txBuilder.getSigningPayload,
+        signedTx,
+        setSignedTx,
         // Storage
         currentTxId,
         saveToStorage,

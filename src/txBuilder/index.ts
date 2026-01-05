@@ -43,6 +43,7 @@ export {
   // Signing
   attachSignatureToSpend,
   signSpend,
+  signImportedTxJson,
   verifySignatureOnTx,
   countCollectedPkh,
   isPkhComplete,

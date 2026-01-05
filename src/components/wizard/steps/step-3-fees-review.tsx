@@ -13,8 +13,24 @@ import { DEFAULT_FEE_PER_WORD_NICKS, estimateFeePerWordFromBytes, feeNicksToNock
 import { Output } from "@/types";
 import { validateRecipientAddress } from "@/lib/address-utils";
 
+const NICKS_PER_NOCK = 65536n;
+
+function nicksToNock(nicks: bigint | null): number | null {
+  if (nicks === null) return null;
+  return Number(nicks) / Number(NICKS_PER_NOCK);
+}
+
 export function Step3FeesReview() {
-  const { transactionData, updateFee, updateOutputs, setCurrentStep, buildTx, isBuilding, txError } = useTransaction();
+  const {
+    transactionData,
+    updateFee,
+    updateOutputs,
+    setCurrentStep,
+    buildTx,
+    isBuilding,
+    txError,
+    feeReport,
+  } = useTransaction();
   const [fee, setFee] = useState(transactionData.fee);
   const [useCalculatedFee, setUseCalculatedFee] = useState(true);
   
@@ -92,7 +108,10 @@ export function Step3FeesReview() {
 
   const change = inputTotal - outputTotal - fee;
   const feeIsSufficient = fee >= requiredFeeNock;
-  const hasValidOutputs = outputs.some((o) => o.address.trim() && o.amount > 0);
+  const hasDestLock = transactionData.destinationLock?.type === "multisig";
+  const hasValidOutputs = hasDestLock 
+    ? outputs.some((o) => o.amount > 0) 
+    : outputs.some((o) => o.address.trim() && o.amount > 0);
   const isValid = fee > 0 && feeIsSufficient && change >= 0 && transactionData.selectedNotes.length > 0 && hasValidOutputs;
 
   const handleBack = () => {
@@ -100,20 +119,27 @@ export function Step3FeesReview() {
   };
 
   const handleNext = async () => {
-    // Validate all addresses first
-    for (const output of outputs) {
-      if (output.address.trim()) {
-        const addressError = validateRecipientAddress(output.address);
-        if (addressError) {
-          toast.error(`Invalid address: ${addressError}`);
-          return;
+    // When destination lock is configured, we only need amount validation
+    const hasDestinationLock = transactionData.destinationLock?.type === "multisig";
+    
+    // Validate all addresses first (skip if using destination lock)
+    if (!hasDestinationLock) {
+      for (const output of outputs) {
+        if (output.address.trim()) {
+          const addressError = validateRecipientAddress(output.address);
+          if (addressError) {
+            toast.error(`Invalid address: ${addressError}`);
+            return;
+          }
         }
       }
     }
+    const validOutputs = hasDestinationLock 
+      ? outputs.filter((o) => o.amount > 0).map(o => ({ ...o, address: "multisig-lock" }))
+      : outputs.filter((o) => o.address.trim() && o.amount > 0);
     
-    const validOutputs = outputs.filter((o) => o.address.trim() && o.amount > 0);
     if (validOutputs.length === 0) {
-      toast.error("Please enter at least one recipient");
+      toast.error(hasDestinationLock ? "Please enter an amount to send" : "Please enter at least one recipient");
       return;
     }
     if (fee <= 0) {
@@ -179,9 +205,64 @@ export function Step3FeesReview() {
                 </p>
               </div>
             </div>
+            {(feeReport.currentFee !== null || feeReport.calculatedFee !== null) && (
+              <div className="mt-4 rounded-lg border border-dashed border-border/60 bg-background/40 p-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Builder Fee</span>
+                  <span className="font-mono">
+                    {nicksToNock(feeReport.currentFee)?.toFixed(6) ?? "—"} NOCK
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-muted-foreground">Required</span>
+                  <span className="font-mono">
+                    {nicksToNock(feeReport.calculatedFee)?.toFixed(6) ?? "—"} NOCK
+                  </span>
+                </div>
+                <div
+                  className={`mt-2 text-xs font-semibold ${
+                    feeReport.feeSufficient ? "text-green-500" : "text-destructive"
+                  }`}
+                >
+                  {feeReport.feeSufficient ? "WASM builder reports sufficient fee" : "Fee is still insufficient"}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </motion.div>
+
+      {/* Destination Lock Info */}
+      {transactionData.destinationLock?.type === "multisig" && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+        >
+          <Card className="border-green-500/30 bg-green-500/5">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
+                  <Users className="w-5 h-5 text-green-500" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-green-600">Sending to Multisig Lock</div>
+                  <div className="text-sm text-muted-foreground">
+                    {transactionData.destinationLock.threshold} of {transactionData.destinationLock.signers.length} signatures required to spend
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1">
+                {transactionData.destinationLock.signers.map((signer, idx) => (
+                  <div key={signer.id} className="text-xs text-muted-foreground font-mono truncate">
+                    {idx + 1}. {signer.label}: {signer.pubkey.slice(0, 12)}...{signer.pubkey.slice(-8)}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
 
       {/* Send To Section */}
       <motion.div
@@ -191,52 +272,17 @@ export function Step3FeesReview() {
       >
         <Card>
           <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <CircleDollarSign className="w-5 h-5 text-[#FFC412]" />
-                <h3 className="font-semibold">Recipients</h3>
-              </div>
-              <Button variant="outline" size="sm" onClick={addOutput} className="h-8 text-xs">
-                <Plus className="w-3 h-3 mr-1" />
-                Add Recipient
-              </Button>
-            </div>
-
-            <div className="space-y-3">
-              {outputs.map((output) => {
-                const addressError = output.address.trim() ? validateRecipientAddress(output.address) : null;
-                const isAddressValid = output.address.trim() && !addressError;
-                
-                return (
-                <div key={output.id} className="p-3 rounded-lg bg-card/50 border border-border/50 space-y-3">
-                  <div className="relative">
-                    <Input
-                      placeholder="Recipient address (Base58)"
-                      value={output.address}
-                      onChange={(e) => updateOutput(output.id, "address", e.target.value)}
-                      className={`bg-background/50 h-11 pr-10 font-mono text-sm placeholder:font-sans ${
-                        addressError 
-                          ? "border-red-500 focus:border-red-500" 
-                          : isAddressValid 
-                            ? "border-green-500 focus:border-green-500" 
-                            : "border-border"
-                      }`}
-                    />
-                    {outputs.length > 1 && (
-                      <button
-                        onClick={() => removeOutput(output.id)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-red-500 transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
+            {transactionData.destinationLock?.type === "multisig" ? (
+              // Simplified view for multisig destination - amount only
+              <>
+                <div className="flex items-center gap-2 mb-4">
+                  <Users className="w-5 h-5 text-green-500" />
+                  <h3 className="font-semibold">Send to Multisig Lock</h3>
+                </div>
+                <div className="p-3 rounded-lg bg-card/50 border border-green-500/30 space-y-3">
+                  <div className="text-sm text-muted-foreground">
+                    Sending to: <span className="font-medium text-green-600">{transactionData.destinationLock.name}</span>
                   </div>
-                  {addressError && (
-                    <p className="text-xs text-red-500 flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" />
-                      {addressError}
-                    </p>
-                  )}
                   <div className="flex items-center gap-2">
                     <div className="relative flex-1">
                       <Input
@@ -244,8 +290,8 @@ export function Step3FeesReview() {
                         step="0.0001"
                         min="0"
                         placeholder="0.00"
-                        value={output.amount || ""}
-                        onChange={(e) => updateOutput(output.id, "amount", e.target.value)}
+                        value={outputs[0]?.amount || ""}
+                        onChange={(e) => updateOutput(outputs[0]?.id, "amount", e.target.value)}
                         className="bg-background/50 border-border h-11 pr-16 text-lg font-semibold"
                       />
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
@@ -255,16 +301,93 @@ export function Step3FeesReview() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => updateOutput(output.id, "amount", Math.max(0, inputTotal - fee).toString())}
+                      onClick={() => updateOutput(outputs[0]?.id, "amount", Math.max(0, inputTotal - fee).toString())}
                       className="h-11 px-3 border-border hover:bg-[#FFC412]/10 hover:text-[#FFC412] hover:border-[#FFC412]/50"
                     >
                       MAX
                     </Button>
                   </div>
                 </div>
-              );
-              })}
-            </div>
+              </>
+            ) : (
+              // Regular recipient address input
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <CircleDollarSign className="w-5 h-5 text-[#FFC412]" />
+                    <h3 className="font-semibold">Recipients</h3>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={addOutput} className="h-8 text-xs">
+                    <Plus className="w-3 h-3 mr-1" />
+                    Add Recipient
+                  </Button>
+                </div>
+
+                <div className="space-y-3">
+                  {outputs.map((output) => {
+                    const addressError = output.address.trim() ? validateRecipientAddress(output.address) : null;
+                    const isAddressValid = output.address.trim() && !addressError;
+                    
+                    return (
+                    <div key={output.id} className="p-3 rounded-lg bg-card/50 border border-border/50 space-y-3">
+                      <div className="relative">
+                        <Input
+                          placeholder="Recipient address (Base58)"
+                          value={output.address}
+                          onChange={(e) => updateOutput(output.id, "address", e.target.value)}
+                          className={`bg-background/50 h-11 pr-10 font-mono text-sm placeholder:font-sans ${
+                            addressError 
+                              ? "border-red-500 focus:border-red-500" 
+                              : isAddressValid 
+                                ? "border-green-500 focus:border-green-500" 
+                                : "border-border"
+                          }`}
+                        />
+                        {outputs.length > 1 && (
+                          <button
+                            onClick={() => removeOutput(output.id)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-red-500 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      {addressError && (
+                        <p className="text-xs text-red-500 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3" />
+                          {addressError}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <Input
+                            type="number"
+                            step="0.0001"
+                            min="0"
+                            placeholder="0.00"
+                            value={output.amount || ""}
+                            onChange={(e) => updateOutput(output.id, "amount", e.target.value)}
+                            className="bg-background/50 border-border h-11 pr-16 text-lg font-semibold"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                            NOCK
+                          </span>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => updateOutput(output.id, "amount", Math.max(0, inputTotal - fee).toString())}
+                          className="h-11 px-3 border-border hover:bg-[#FFC412]/10 hover:text-[#FFC412] hover:border-[#FFC412]/50"
+                        >
+                          MAX
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                  })}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </motion.div>

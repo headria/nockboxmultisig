@@ -58,6 +58,7 @@ interface WalletContextType {
   refreshNotes: () => Promise<void>;
   selectNotesForAmount: (amount: number) => Note[];
   signTransaction: (args: { notes: Note[]; recipient: string; amountNock: number; feeNock: number }) => Promise<unknown>;
+  signRawTx: (args: { rawTx: unknown; notes: unknown[]; spendConditions: unknown[] }) => Promise<unknown>;
   broadcastTransaction: (signedTx: unknown) => Promise<string>;
   grpcEndpoint: string | null;
 }
@@ -133,7 +134,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       balance: 0,
       notes: [],
     });
-  }, []);
+  }, [setLastConnected]);
 
   const connect = useCallback(async () => {
     setIsConnecting(true);
@@ -487,6 +488,49 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [wallet.address]);
 
+  const signRawTx = useCallback(async (args: { rawTx: unknown; notes: unknown[]; spendConditions: unknown[] }): Promise<unknown> => {
+    if (!providerRef.current) {
+      throw new Error('Wallet not connected');
+    }
+    if (!wasmRef.current) {
+      throw new Error('WASM not initialized. Please reconnect your wallet.');
+    }
+
+    const wasm = wasmRef.current;
+
+    try {
+      const hasToProtobuf =
+        !!args.rawTx &&
+        typeof args.rawTx === 'object' &&
+        typeof (args.rawTx as { toProtobuf?: unknown }).toProtobuf === 'function';
+
+      const rawTx = hasToProtobuf ? args.rawTx : wasm.RawTx.fromProtobuf(args.rawTx);
+
+      const signedTxProtobuf = await providerRef.current.signRawTx({
+        rawTx,
+        notes: args.notes,
+        spendConditions: args.spendConditions,
+      });
+
+      return signedTxProtobuf;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (errorMessage === 'LOCKED' || errorMessage.includes('LOCKED')) {
+        console.log('Wallet is locked, attempting to unlock...');
+        try {
+          await providerRef.current.request({ method: 'requestAccounts' });
+        } catch (unlockError) {
+          console.error('Failed to unlock wallet:', unlockError);
+          throw new Error('Please unlock your Iris wallet and try again');
+        }
+      }
+
+      console.error('Failed to sign raw transaction:', error);
+      throw error;
+    }
+  }, []);
+
   // Broadcast a signed transaction to the network using gRPC client
   const broadcastTransaction = useCallback(async (signedTx: unknown): Promise<string> => {
     if (!grpcClientRef.current) {
@@ -541,7 +585,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <WalletContext.Provider
-      value={{ wallet, isConnecting, isInstalled, isLocked, connect, disconnect, reconnect, refreshNotes, selectNotesForAmount, signTransaction, broadcastTransaction, grpcEndpoint }}
+      value={{ wallet, isConnecting, isInstalled, isLocked, connect, disconnect, reconnect, refreshNotes, selectNotesForAmount, signTransaction, signRawTx, broadcastTransaction, grpcEndpoint }}
     >
       {children}
     </WalletContext.Provider>

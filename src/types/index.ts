@@ -28,11 +28,22 @@ export interface MultisigConfig {
   pubkeys: Pubkey[];
 }
 
+export interface DestinationLock {
+  id: string;
+  name: string;
+  type: "single" | "multisig";
+  threshold: number;
+  signers: Pubkey[];
+  spendConditionProtobuf?: Uint8Array;
+}
+
 export interface Output {
   id: string;
   address: string;
   amount: number;
   asset: string;
+  // Optional: use a custom lock instead of deriving from address
+  destinationLock?: DestinationLock;
 }
 
 export interface Seed {
@@ -47,6 +58,8 @@ export interface TransactionData {
   outputs: Output[];
   seeds: Seed[];
   fee: number;
+  // Optional destination lock for creating multisig outputs
+  destinationLock?: DestinationLock;
 }
 
 export interface WalletState {
